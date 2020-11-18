@@ -1,0 +1,145 @@
+---
+title: "TidyTuesdayPenguins!!"
+author: "Jeff Grayum"
+date: "8/2/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages, etc. Trying to figure out git.
+
+```{r}
+install.packages("tidymodels")
+install.packages(c("tidyverse", "tidytuesdayR", "recipes", "parsnip", "broom", "modeldata", "kknn"))
+library(tidyverse)
+library(tidytuesdayR)
+library(tidymodels)
+library(recipes)
+library(parsnip)
+library(broom)
+library(modeldata)
+library(kknn)
+theme_set(theme_light())
+```
+
+Loading library.
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2020-07-28')
+penguins <- tuesdata$penguins
+tuesdata
+```
+
+
+Getting some basic info., what distinguishes species?
+```{r}
+penguins %>%
+  count(species, sort = TRUE)
+
+penguins %>%
+  count(island, sort = TRUE)
+
+penguins_pivoted <- penguins %>%
+  pivot_longer(cols = bill_length_mm:body_mass_g,
+               names_to = "metric",
+               values_to = "value")
+
+penguins_pivoted %>%
+  ggplot(aes(value, fill = species)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ metric, scales = "free_x")
+
+penguins_pivoted %>%
+  ggplot(aes(species, value)) +
+  geom_boxplot() +
+  facet_wrap(~ metric, scales = "free_y")
+
+
+
+```
+
+
+Plotting species vs year and island.
+```{r}
+penguins %>%
+  ggplot(aes(year, fill = species)) +
+  geom_bar()
+
+
+
+penguins %>%
+  ggplot(aes(island, fill = species)) +
+  geom_bar()
+```
+
+
+### Models to predict species.
+```{r}
+set.seed(2020)
+
+split <- penguins %>%
+  mutate(species = fct_lump(species, 1)) %>%
+  initial_split()
+
+
+
+training_data <- training(split)
+
+splits <- training_data %>%
+  rsample::vfold_cv(v = 10)
+
+met <-  metric_set(accuracy, kap, roc_auc)
+
+logistic_spec <- logistic_reg(mode = "classification") %>%
+  set_engine("glm")
+
+logistic_model <- logistic_spec %>%
+  fit_resamples(species ~ bill_length_mm, 
+                resamples = splits,
+                metrics = met)
+
+logistic_model_extended <- logistic_reg(mode = "classification") %>%
+  set_engine("glm") %>%
+  fit_resamples(species ~ bill_length_mm + 
+                  bill_depth_mm + 
+                  flipper_length_mm + body_mass_g, 
+                resamples = splits,
+                metrics = metric_set(accuracy, kap, roc_auc))
+
+nn <- nearest_neighbor(mode = "classification", 
+                               neighbors = 10) %>%
+  set_engine("kknn") %>%
+  fit_resamples(species ~ bill_length_mm + 
+                  bill_depth_mm + 
+                  flipper_length_mm + body_mass_g, 
+                resamples = splits,
+                metrics = metric_set(accuracy, kap, roc_auc))
+
+bind_rows(
+collect_metrics(logistic_model) %>% 
+mutate(model = "Logistic: bill length"),
+collect_metrics(logistic_model_extended) %>%
+  mutate(model = "Logistic: 4 predictors"),
+  collect_metrics(nn) %>% 
+  mutate(model = "KNN: 10 neighbors")
+) %>% 
+  ggplot(aes(mean, .metric, color = model)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = mean - std_err,
+                     xmax = mean + std_err)) +
+  labs(title = "Cross validated accuracy metrics across models", 
+       x = "Estimated metric (+/-) standard error", 
+       y = "")
+```
+
+
+```{r}
+predict(model, new_data = testing(split)) %>%
+  bind_cols(testing(split)) %>%
+  metrics(species, .pred_class)
+```
+
